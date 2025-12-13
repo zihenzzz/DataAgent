@@ -31,6 +31,8 @@ public final class Constant {
 
 	public static final String AGENT_ID = "agentId";
 
+	public static final String MULTI_TURN_CONTEXT = "MULTI_TURN_CONTEXT";
+
 	public static final String RESULT = "result";
 
 	public static final String NL2SQL_GRAPH_NAME = "nl2sqlGraph";
@@ -151,5 +153,8 @@ public final class Constant {
 
 	// 人类复核相关
 	public static final String HUMAN_REVIEW_ENABLED = "HUMAN_REVIEW_ENABLED";
+
+	// 控制是否生成Markdown简洁报告
+	public static final String PLAIN_REPORT = "PLAIN_REPORT";
 
 }

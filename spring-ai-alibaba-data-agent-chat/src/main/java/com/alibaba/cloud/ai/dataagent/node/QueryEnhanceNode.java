@@ -39,7 +39,7 @@ import java.util.Map;
 import static com.alibaba.cloud.ai.dataagent.constant.Constant.*;
 
 /**
- * 查询处理节点，用于查询改写、分解和关键词提取
+ * 查询丰富节点，用于根据evidence信息把业务翻译。查询改写、分解和关键词提取
  */
 @Slf4j
 @Component
@@ -58,9 +58,10 @@ public class QueryEnhanceNode implements NodeAction {
 		log.info("User input for query enhance: {}", userInput);
 
 		String evidence = StateUtil.getStringValue(state, EVIDENCE);
+		String multiTurn = StateUtil.getStringValue(state, MULTI_TURN_CONTEXT, "(无)");
 
-		// 构建查询处理提示，多轮对话暂时为空
-		String prompt = PromptHelper.buildQueryEnhancePrompt(null, userInput, evidence);
+		// 构建查询处理提示
+		String prompt = PromptHelper.buildQueryEnhancePrompt(multiTurn, userInput, evidence);
 		log.debug("Built query enhance prompt as follows \n {} \n", prompt);
 
 		// 调用LLM进行查询处理

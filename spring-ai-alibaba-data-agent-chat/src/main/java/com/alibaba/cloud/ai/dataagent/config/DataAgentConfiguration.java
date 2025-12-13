@@ -17,50 +17,33 @@
 package com.alibaba.cloud.ai.dataagent.config;
 
 import com.alibaba.cloud.ai.dataagent.config.file.FileStorageProperties;
-import com.alibaba.cloud.ai.dataagent.dispatcher.FeasibilityAssessmentDispatcher;
-import com.alibaba.cloud.ai.dataagent.dispatcher.HumanFeedbackDispatcher;
-import com.alibaba.cloud.ai.dataagent.dispatcher.IntentRecognitionDispatcher;
-import com.alibaba.cloud.ai.dataagent.dispatcher.PlanExecutorDispatcher;
-import com.alibaba.cloud.ai.dataagent.dispatcher.PythonExecutorDispatcher;
-import com.alibaba.cloud.ai.dataagent.dispatcher.QueryEnhanceDispatcher;
-import com.alibaba.cloud.ai.dataagent.dispatcher.SQLExecutorDispatcher;
-import com.alibaba.cloud.ai.dataagent.dispatcher.SemanticConsistenceDispatcher;
-import com.alibaba.cloud.ai.dataagent.dispatcher.SqlGenerateDispatcher;
-import com.alibaba.cloud.ai.dataagent.dispatcher.SqlOptimizeDispatcher;
-import com.alibaba.cloud.ai.dataagent.dispatcher.TableRelationDispatcher;
-import com.alibaba.cloud.ai.dataagent.node.EvidenceRecallNode;
-import com.alibaba.cloud.ai.dataagent.node.FeasibilityAssessmentNode;
-import com.alibaba.cloud.ai.dataagent.node.HumanFeedbackNode;
-import com.alibaba.cloud.ai.dataagent.node.IntentRecognitionNode;
-import com.alibaba.cloud.ai.dataagent.node.PlanExecutorNode;
-import com.alibaba.cloud.ai.dataagent.node.PlannerNode;
-import com.alibaba.cloud.ai.dataagent.node.PythonAnalyzeNode;
-import com.alibaba.cloud.ai.dataagent.node.PythonExecuteNode;
-import com.alibaba.cloud.ai.dataagent.node.PythonGenerateNode;
-import com.alibaba.cloud.ai.dataagent.node.QueryEnhanceNode;
-import com.alibaba.cloud.ai.dataagent.node.ReportGeneratorNode;
-import com.alibaba.cloud.ai.dataagent.node.SchemaRecallNode;
-import com.alibaba.cloud.ai.dataagent.node.SemanticConsistencyNode;
-import com.alibaba.cloud.ai.dataagent.node.SqlExecuteNode;
-import com.alibaba.cloud.ai.dataagent.node.SqlGenerateNode;
-import com.alibaba.cloud.ai.dataagent.node.SqlOptimizeNode;
-import com.alibaba.cloud.ai.dataagent.node.TableRelationNode;
+import com.alibaba.cloud.ai.dataagent.dispatcher.*;
+import com.alibaba.cloud.ai.dataagent.mcp.McpServerToolUtil;
+import com.alibaba.cloud.ai.dataagent.node.*;
+import com.alibaba.cloud.ai.dataagent.service.aimodelconfig.AiModelRegistry;
 import com.alibaba.cloud.ai.dataagent.strategy.EnhancedTokenCountBatchingStrategy;
+import com.alibaba.cloud.ai.dataagent.util.NodeBeanUtil;
 import com.alibaba.cloud.ai.graph.GraphRepresentation;
 import com.alibaba.cloud.ai.graph.KeyStrategy;
 import com.alibaba.cloud.ai.graph.KeyStrategyFactory;
 import com.alibaba.cloud.ai.graph.StateGraph;
 import com.alibaba.cloud.ai.graph.exception.GraphStateException;
-import com.alibaba.cloud.ai.dataagent.util.NodeBeanUtil;
 import com.knuddels.jtokkit.api.EncodingType;
 import lombok.extern.slf4j.Slf4j;
-import org.jetbrains.annotations.NotNull;
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.embedding.BatchingStrategy;
 import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.ToolCallbackProvider;
+import org.springframework.ai.tool.resolution.DelegatingToolCallbackResolver;
+import org.springframework.ai.tool.resolution.SpringBeanToolCallbackResolver;
+import org.springframework.ai.tool.resolution.StaticToolCallbackResolver;
+import org.springframework.ai.tool.resolution.ToolCallbackResolver;
+import org.springframework.ai.transformer.splitter.TextSplitter;
+import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.ai.vectorstore.SimpleVectorStore;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.aop.TargetSource;
+import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -71,17 +54,15 @@ import org.springframework.boot.web.client.RestClientCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import org.springframework.context.support.GenericApplicationContext;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
+import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.netty.http.client.HttpClient;
 
 import java.time.Duration;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Optional;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadFactory;
+import java.util.*;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.alibaba.cloud.ai.dataagent.constant.Constant.*;
@@ -97,6 +78,7 @@ import static com.alibaba.cloud.ai.graph.action.AsyncEdgeAction.edge_async;
  */
 @Slf4j
 @Configuration
+@EnableAsync
 @EnableConfigurationProperties({ CodeExecutorProperties.class, DataAgentProperties.class, FileStorageProperties.class })
 public class DataAgentConfiguration implements DisposableBean {
 
@@ -134,6 +116,8 @@ public class DataAgentConfiguration implements DisposableBean {
 			keyStrategyHashMap.put(INPUT_KEY, KeyStrategy.REPLACE);
 			// Agent ID
 			keyStrategyHashMap.put(AGENT_ID, KeyStrategy.REPLACE);
+			// Multi-turn context
+			keyStrategyHashMap.put(MULTI_TURN_CONTEXT, KeyStrategy.REPLACE);
 			// Intent recognition
 			keyStrategyHashMap.put(INTENT_RECOGNITION_NODE_OUTPUT, KeyStrategy.REPLACE);
 			// QUERY_ENHANCE_NODE节点输出
@@ -303,47 +287,140 @@ public class DataAgentConfiguration implements DisposableBean {
 	}
 
 	@Bean
-	@ConditionalOnMissingBean(ChatClient.class)
-	public ChatClient chatClient(ChatModel chatModel) {
-		return ChatClient.builder(chatModel).build();
+	public ToolCallbackResolver toolCallbackResolver(GenericApplicationContext context) {
+		List<ToolCallback> allFunctionAndToolCallbacks = new ArrayList<>(
+				McpServerToolUtil.excludeMcpServerTool(context, ToolCallback.class));
+		McpServerToolUtil.excludeMcpServerTool(context, ToolCallbackProvider.class)
+			.stream()
+			.map(pr -> List.of(pr.getToolCallbacks()))
+			.forEach(allFunctionAndToolCallbacks::addAll);
+
+		var staticToolCallbackResolver = new StaticToolCallbackResolver(allFunctionAndToolCallbacks);
+
+		var springBeanToolCallbackResolver = SpringBeanToolCallbackResolver.builder()
+			.applicationContext(context)
+			.build();
+
+		return new DelegatingToolCallbackResolver(List.of(staticToolCallbackResolver, springBeanToolCallbackResolver));
+	}
+
+	/**
+	 * 动态生成 EmbeddingModel 的代理 Bean。 原理： 1. 这是一个 Bean，Milvus/PgVector Starter 能看到它，启动不会报错。
+	 * 2. 它是动态代理，内部没有写死任何方法。 3. 每次被调用时，它会执行 getTarget() -> registry.getEmbeddingModel()。
+	 */
+	@Bean
+	@Primary
+	public EmbeddingModel embeddingModel(AiModelRegistry registry) {
+
+		// 1. 定义目标源 (TargetSource)
+		TargetSource targetSource = new TargetSource() {
+			@Override
+			public Class<?> getTargetClass() {
+				return EmbeddingModel.class;
+			}
+
+			@Override
+			public boolean isStatic() {
+				// 关键：声明是动态的，每次都要重新获取目标
+				return false;
+			}
+
+			@Override
+			public Object getTarget() {
+				// 每次方法调用，都去注册表拿最新的
+				return registry.getEmbeddingModel();
+			}
+
+			@Override
+			public void releaseTarget(Object target) {
+				// 无需释放
+			}
+		};
+
+		// 2. 创建代理工厂
+		ProxyFactory proxyFactory = new ProxyFactory();
+		proxyFactory.setTargetSource(targetSource);
+		// 代理接口
+		proxyFactory.addInterface(EmbeddingModel.class);
+
+		// 3. 返回动态生成的代理对象
+		return (EmbeddingModel) proxyFactory.getProxy();
 	}
 
 	@Bean(name = "dbOperationExecutor")
 	public ExecutorService dbOperationExecutor() {
 		// 初始化专用线程池，用于数据库操作
 		// 线程数量设置为CPU核心数的2倍，但不少于4个，不超过16个
-		int threadCount = Math.max(4, Math.min(Runtime.getRuntime().availableProcessors() * 2, 16));
-		log.info("Database operation executor initialized with {} threads", threadCount);
-		dbOperationExecutor = Executors.newFixedThreadPool(threadCount, new ThreadFactory() {
+		int corePoolSize = Math.max(4, Math.min(Runtime.getRuntime().availableProcessors() * 2, 16));
+		log.info("Database operation executor initialized with {} threads", corePoolSize);
+
+		// 自定义线程工厂
+		ThreadFactory threadFactory = new ThreadFactory() {
 			private final AtomicInteger threadNumber = new AtomicInteger(1);
 
 			@Override
-			public Thread newThread(@NotNull Runnable r) {
+			public Thread newThread(Runnable r) {
 				Thread t = new Thread(r, "db-operation-" + threadNumber.getAndIncrement());
-				t.setDaemon(true);
+				t.setDaemon(false);
+				if (t.getPriority() != Thread.NORM_PRIORITY) {
+					t.setPriority(Thread.NORM_PRIORITY);
+				}
 				return t;
 			}
-		});
+		};
+
+		// 创建原生线程池
+		this.dbOperationExecutor = new ThreadPoolExecutor(corePoolSize, corePoolSize, 60L, TimeUnit.SECONDS,
+				new LinkedBlockingQueue<>(500), threadFactory, new ThreadPoolExecutor.CallerRunsPolicy());
+
 		return dbOperationExecutor;
 	}
 
 	@Override
 	public void destroy() {
 		if (dbOperationExecutor != null && !dbOperationExecutor.isShutdown()) {
-			log.info("Shutting down database operation executor");
+			log.info("Shutting down database operation executor...");
+
+			// 记录关闭前的状态，便于排查问题
+			if (dbOperationExecutor instanceof ThreadPoolExecutor tpe) {
+				log.info("Executor Status before shutdown: [Queue Size: {}], [Active Count: {}], [Completed Tasks: {}]",
+						tpe.getQueue().size(), tpe.getActiveCount(), tpe.getCompletedTaskCount());
+			}
+
+			// 1. 停止接收新任务
 			dbOperationExecutor.shutdown();
+
 			try {
-				if (!dbOperationExecutor.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS)) {
-					log.warn("Database operation executor did not terminate gracefully, forcing shutdown");
+				// 2. 等待现有任务完成（包括队列中的）
+				if (!dbOperationExecutor.awaitTermination(60, TimeUnit.SECONDS)) {
+					log.warn("Executor did not terminate in 60s. Forcing shutdown...");
+
+					// 3. 超时强行关闭
 					dbOperationExecutor.shutdownNow();
+
+					// 4. 再次确认是否关闭
+					if (!dbOperationExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+						log.error("Executor failed to terminate completely.");
+					}
+				}
+				else {
+					log.info("Database operation executor terminated gracefully.");
 				}
 			}
 			catch (InterruptedException e) {
-				log.warn("Interrupted while waiting for database operation executor to terminate");
+				log.warn("Interrupted during executor shutdown. Forcing immediate shutdown.");
 				dbOperationExecutor.shutdownNow();
 				Thread.currentThread().interrupt();
 			}
 		}
+	}
+
+	@Bean
+	public TextSplitter textSplitter(DataAgentProperties properties) {
+		DataAgentProperties.TextSplitter textSplitterProps = properties.getTextSplitter();
+		return new TokenTextSplitter(textSplitterProps.getChunkSize(), textSplitterProps.getMinChunkSizeChars(),
+				textSplitterProps.getMinChunkLengthToEmbed(), textSplitterProps.getMaxNumChunks(),
+				textSplitterProps.isKeepSeparator());
 	}
 
 }

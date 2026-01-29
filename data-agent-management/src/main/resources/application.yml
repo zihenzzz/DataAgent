@@ -6,7 +6,7 @@ spring:
   datasource:
     url: ${DATA_AGENT_DATASOURCE_URL:jdbc:mysql://127.0.0.1:3306/saa_data_agent?useUnicode=true&characterEncoding=utf-8&zeroDateTimeBehavior=convertToNull&transformedBitIsBoolean=true&allowMultiQueries=true&allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=Asia/Shanghai}
     username: ${DATA_AGENT_DATASOURCE_USERNAME:root}
-    password: ${DATA_AGENT_DATASOURCE_PASSWORD:root}
+    password: ${DATA_AGENT_DATASOURCE_PASSWORD:zihen81033}
     driver-class-name: com.mysql.cj.jdbc.Driver
     type: com.alibaba.druid.pool.DruidDataSource
   sql:
@@ -21,6 +21,15 @@ spring:
     vectorstore:
       type: simple
     alibaba:
+      graph:
+        observation:
+          enabled: true
+          include-input: true
+          include-output: true
+    chat:
+      observations:
+        include-prompt: true
+        include-completion: true
       data-agent:
         vector-store:
           table-topk-limit: 10
@@ -66,3 +75,42 @@ logging:
     com.alibaba.cloud.ai.dataagent.workflow.node: debug
     com.alibaba.cloud.ai.mapper: debug
     org.springframework.jdbc: debug
+
+# OpenTelemetry观测配置
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+  endpoint:
+    health:
+      show-details: always
+  tracing:
+    sampling:
+      probability: 1.0  # 100% 采样率（生产环境建议 0.1）
+  observations:
+    annotations:
+      enabled: true
+
+# OpenTelemetry核心配置
+otel:
+  service:
+    name: spring-ai-alibaba-data-agent
+  resource:
+    attributes:
+      deployment.environment: development
+
+  traces:
+    exporter: otlp
+    sampler: always_on
+  metrics:
+    exporter: none
+  logs:
+    exporter: none
+
+  exporter:
+    otlp:
+      endpoint: "https://cloud.langfuse.com/api/public/otel"
+      protocol: http/protobuf
+      headers:
+        authorization: "Basic cGstbGYtMWViYWY2NTAtMmM3Mi00M2Y2LWI5N2ItZmI2Y2Y5ODQ3ZDA3OnNrLWxmLTgzNWUyM2VmLWFhNDMtNGVkZS05MWQxLTFmNmNmMjEzMTZjOA=="

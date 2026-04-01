@@ -12,7 +12,7 @@ spring:
   datasource:
     url: ${DATA_AGENT_DATASOURCE_URL:jdbc:mysql://127.0.0.1:3306/saa_data_agent?useUnicode=true&characterEncoding=utf-8&zeroDateTimeBehavior=convertToNull&transformedBitIsBoolean=true&allowMultiQueries=true&allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=Asia/Shanghai}
     username: ${DATA_AGENT_DATASOURCE_USERNAME:root}
-    password: ${DATA_AGENT_DATASOURCE_PASSWORD:root}
+    password: ${DATA_AGENT_DATASOURCE_PASSWORD:zihen81033}
     driver-class-name: com.mysql.cj.jdbc.Driver
     type: com.alibaba.druid.pool.DruidDataSource
   sql:
@@ -56,9 +56,9 @@ spring:
         # Langfuse 可观测性配置
         langfuse:
           enabled: ${LANGFUSE_ENABLED:false}
-          host: ${LANGFUSE_HOST:}
-          public-key: ${LANGFUSE_PUBLIC_KEY:}
-          secret-key: ${LANGFUSE_SECRET_KEY:}
+          host: ${LANGFUSE_HOST:https://cloud.langfuse.com}
+          public-key: ${LANGFUSE_PUBLIC_KEY:pk-lf-447372f8-5026-4f71-894c-2cb9d8060d0a}
+          secret-key: ${LANGFUSE_SECRET_KEY:sk-lf-ff35c7ec-44df-4783-89fa-e3301950d2ff}
   webflux:
     multipart:
       max-file-size: 10MB

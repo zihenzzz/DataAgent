@@ -50,6 +50,7 @@ public class PlannerNode implements NodeAction {
 	private final LlmService llmService;
 
 	@Override
+
 	public Map<String, Object> apply(OverAllState state) throws Exception {
 		// 是否为NL2SQL模式
 		Boolean onlyNl2sql = state.value(IS_ONLY_NL2SQL, false);

@@ -21,13 +21,16 @@ import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.action.NodeAction;
 import com.alibaba.cloud.ai.graph.streaming.OutputType;
 import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
+import io.opentelemetry.api.trace.Span;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.SignalType;
 
 import static com.alibaba.cloud.ai.dataagent.constant.Constant.TRACE_THREAD_ID;
 
@@ -136,28 +139,55 @@ public final class FluxUtil {
 	private static Flux<GraphResponse<StreamingOutput>> toStreamingResponseFlux(String nodeName, OverAllState state,
 			Flux<ChatResponse> sourceFlux, Supplier<Map<String, Object>> resultSupplier) {
 		Object threadId = state.value(TRACE_THREAD_ID).orElse(null);
+		Span nodeSpan = LangfuseService.startNodeSpan(nodeName, state);
+		StringBuilder collectedOutput = new StringBuilder();
+		AtomicReference<Throwable> streamError = new AtomicReference<>();
+		AtomicReference<Map<String, Object>> resultData = new AtomicReference<>();
 
 		Flux<GraphResponse<StreamingOutput>> streamingFlux = sourceFlux
-			.doOnNext(response -> extractAndAccumulateTokens(threadId, response))
+			.doOnNext(response -> {
+				extractAndAccumulateTokens(threadId, nodeName, response);
+				collectedOutput.append(ChatResponseUtil.getText(response));
+			})
 			.filter(response -> response != null && response.getResult() != null
 					&& response.getResult().getOutput() != null)
 			.map(response -> GraphResponse.of(new StreamingOutput<>(response.getResult().getOutput(), response,
 					nodeName, "", state, OutputType.from(true, nodeName))));
 
-		return streamingFlux.concatWith(Mono.fromSupplier(() -> GraphResponse.done(resultSupplier.get())))
+		return streamingFlux.concatWith(Mono.fromSupplier(() -> {
+			Map<String, Object> result = resultSupplier.get();
+			resultData.set(result);
+			return GraphResponse.done(result);
+		}))
+			.doOnError(streamError::set)
+			.doFinally(signalType -> {
+				if (signalType == SignalType.ON_COMPLETE) {
+					LangfuseService.endNodeSpanSuccess(nodeSpan, state, nodeName, collectedOutput.toString(),
+							resultData.get());
+				}
+				else if (signalType == SignalType.CANCEL) {
+					LangfuseService.endNodeSpanCancelled(nodeSpan, state, nodeName);
+				}
+				else {
+					Throwable error = streamError.get();
+					LangfuseService.endNodeSpanError(nodeSpan, state, nodeName,
+							error != null ? error : new IllegalStateException("Node stream terminated unexpectedly"));
+				}
+			})
 			.onErrorResume(error -> Flux.just(GraphResponse.error(error)));
 	}
 
 	/**
 	 * 从 ChatResponse 中提取 token 用量并累计到 Langfuse Reporter
 	 */
-	private static void extractAndAccumulateTokens(Object threadId, ChatResponse response) {
+	private static void extractAndAccumulateTokens(Object threadId, String nodeName, ChatResponse response) {
 		if (threadId == null || response.getMetadata() == null) {
 			return;
 		}
 		Usage usage = response.getMetadata().getUsage();
 		if (usage != null && (usage.getPromptTokens() > 0 || usage.getCompletionTokens() > 0)) {
-			LangfuseService.accumulateTokens(threadId, usage.getPromptTokens(), usage.getCompletionTokens());
+			LangfuseService.accumulateTokens(threadId, nodeName, usage.getPromptTokens(),
+					usage.getCompletionTokens());
 		}
 	}
 
